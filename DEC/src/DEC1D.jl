@@ -7,10 +7,11 @@ using SymbolicUtils.Rewriters
 recursive_rule(r) = Prewalk(PassThrough(r))
 fprr(r) = Fixpoint(recursive_rule(r))
 
-form0p = x-> symtype(x) == Form0
+hastype(x, T) = symtype(x) == T
 
 const THEORY = DECBase.ThDEC1D
-resolvers = Dict{Symbol,SymbolicUtils.Rule}()
+resolvers = Dict{Any,SymbolicUtils.Rule}()
+resolvers_reverse = []
 @syms L(v::Form1, x::DualForm0)::DualForm0
 @syms ∧(x::Form0, y::Form1)::Form1
 @syms d̃(x::DualForm1)::DualForm0
@@ -27,47 +28,63 @@ ALIAS_REVERSE = []
 
 macro alias(root_name, alias_name)
   quote
-    @syms $alias_name(x)
+    @syms $alias_name(x)::Form
     push!(ALIASES, @rule $alias_name(~x) => $root_name(~x))
     push!(ALIAS_REVERSE, @rule $root_name(~x) => $alias_name(~x))
   end
 end
 
+macro resolution(op, resolveto, src_type, tgt_type)
+  rulename = Symbol("resolve_$(op)_$resolveto")
+  key = QuoteNode(rulename)
+  quote
+    @syms $resolveto(x::$src_type)::$tgt_type
+    $rulename = @rule $op(~x) => (hastype(~x,$src_type) ? $resolveto(~x) : nothing)
+    resolvers[$key] = $rulename 
+    push!(resolvers_reverse, @rule $resolveto(~x) => $op(~x))
+  end
+end
+
 # Time Derivatives
-# @syms ∂ₜ(x::Form)::Form dt(x::Form0)::Form0 
 @syms ∂ₜ(x::Form)::Form 
+
+@resolution ∂ₜ ∂ₜ₀ Form0 Form0
+@resolution ∂ₜ ∂ₜ₁ Form1 Form1
 @alias ∂ₜ dt
 
-@syms ∂ₜ₀(x::Form0)::Form0 dt_0(x::Form0)::Form0
-@syms ∂ₜ₁(x::Form1)::Form1 dt_1(x::Form1)::Form1
-
 # Exterior Derivative 
-@syms d(x::PrimalForm)::PrimalForm d₀(x::Form0)::Form1 
-@syms d̃(x::DualForm)::DualForm dual_d₀(x::DualForm0)::DualForm1 d̃₀(x::DualForm0)::DualForm1
+@syms d(x::PrimalForm)::PrimalForm
+@syms d̃(x::DualForm)::DualForm 
 
-resolvers[:d₀] = @rule d(~x::form0p) => d₀(~x)
-# resolvers[:d₁] = @rule d(~x::form0p) => d₁(~x)
-resolvers[:d̃] = @rule d(~x::DualForm0) => d̃₀(~x)
+@resolution d d₀ Form0 Form1
+@resolution d̃ d̃₀ DualForm0 DualForm1
+@alias d̃₀ dual_d₀
 
 # Hodge Duality
 @syms (⋆)(x::PrimalForm)::DualForm (⋆₀)(x::Form0)::DualForm1 (⋆₁)(x::Form1)::DualForm0 
-@syms star(x::PrimalForm)::DualForm star_1(x::Form1)::DualForm0
+@resolution (⋆) (⋆₀) Form0 DualForm1
+@resolution (⋆) (⋆₁) Form1 DualForm0
+@alias (⋆) star
 
-@syms star_inv(x::Form)::DualForm
-@syms (⋆₀⁻¹)(x::DualForm1)::Form0 star_0_inv(x::DualForm1)::Form0
-@syms (⋆₁⁻¹)(x::DualForm0)::Form1 star_1_inv(x::DualForm0)::Form1
+@syms (⋆⁻¹)(x::DualForm)::PrimalForm
+@resolution (⋆⁻¹) (⋆₀⁻¹) DualForm1 Form0
+@resolution (⋆⁻¹) (⋆₁⁻¹) DualForm0 Form1
+@alias (⋆₀⁻¹) star_0_inv
+@alias (⋆₁⁻¹) star_1_inv
 
 # Laplacian Operators
 @syms Δ(x::Form)::Form 
-@syms Δ₀(x::Form0)::Form0 lapl_0(x::Form0)::Form0 
-@syms Δ₁(x::Form1)::Form1 lapl_1(x::Form1)::Form1 
-
-resolvers[:Δ₀] = @rule Δ(~x::form0p) => Δ₀(~x)
-# resolvers[:Δ₁] = @rule Δ(~x::Form1) => Δ₁(~x)
+@resolution Δ Δ₀ Form0 Form0
+@resolution Δ Δ₁ Form1 Form1
+@alias Δ lapl
+@alias Δ₀ lapl_0
+@alias Δ₁ lapl_1
 
 # Codifferentials
 @syms δ(x::Form)::Form 
-@syms δ₁(x::Form1)::Form0 codif_1(x::Form1)::Form0 
+@resolution δ δ₁ Form1 Form0
+@alias δ codif
+@alias δ₁ codif_1
 
 # Negation as a function
 # TODO: probably don't need this because of numeric_rules
@@ -75,10 +92,16 @@ resolvers[:Δ₀] = @rule Δ(~x::form0p) => Δ₀(~x)
 @syms neg_0(x::Form0)::Form0 neg_1(x::Form1)::Form1
 
 # Misc. Operators
-@syms avg₀₁(x::Form0)::Form1 avg_01(x::Form0)::Form1 
-@syms mag(x::Form)::Form norm(x::Form)::Form 
-@syms mag_0(x::Form0)::Form0 norm_0(x::Form0)::Form0 
-@syms mag_1(x::Form1)::Form1 norm_1(x::Form1)::Form1
+@syms avg₀₁(x::Form0)::Form1
+@alias avg₀₁ avg_01
+
+@syms mag(x::Form)::Form 
+@resolution mag mag_0 Form0 Form0
+@resolution mag mag_1 Form1 Form1
+
+@syms norm(x::Form)::Form 
+@resolution norm norm_0 Form0 Form0
+@resolution norm norm_1 Form1 Form1
 
 # const OPERATORS = [∂ₜ, L, Δ, ∧, d, d̃, ⋆₀,⋆₁, ⋆₀⁻¹, ⋆₁⁻¹]
 @syms 𝟙::DualForm0
@@ -95,6 +118,8 @@ const RULES = [lapl_expand,
   lapl_kern]
 
 
-resolve = fprr(RestartedChain(values(resolvers)))
-resolve_alias = fprr(RestartedChain(ALIASES))
+resolve   = fprr(RestartedChain(values(resolvers)))
+unresolve = fprr(RestartedChain(values(resolvers_reverse)))
+dealias   = fprr(RestartedChain(ALIASES))
+realias   = fprr(RestartedChain(ALIAS_REVERSE))
 end # module
